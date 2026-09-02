@@ -1,0 +1,52 @@
+name: Build Aura V17 APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare Android project
+        run: |
+          mkdir -p build
+          unzip -q AURA_ANDROID_V17_RELEASE_CANDIDATE_RECONSTRUCTED-2.zip -d build
+          echo "Contenu extrait :"
+          find build -maxdepth 4 -type f | sort | head -200
+
+      - name: Find Gradle project
+        run: |
+          PROJECT_DIR=$(find build -name gradlew -type f -print -quit | xargs -r dirname)
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERREUR : aucun gradlew trouvé dans le ZIP."
+            exit 1
+          fi
+          echo "Projet Android trouvé : $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Make Gradle executable
+        run: chmod +x "$PROJECT_DIR/gradlew"
+
+      - name: Build APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Find APK
+        run: |
+          echo "APK générés :"
+          find "$PROJECT_DIR" -type f -name "*.apk" -print
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aura-V17-APK
+          path: |
+            ${{ env.PROJECT_DIR }}/**/build/outputs/apk/**/*.apk
+          if-no-files-found: error
