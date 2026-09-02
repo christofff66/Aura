@@ -16,31 +16,44 @@ jobs:
 
       - name: Prepare Android project
         run: |
+          set -e
           mkdir -p build
           unzip -q AURA_ANDROID_V17_RELEASE_CANDIDATE_RECONSTRUCTED-2.zip -d build
-          echo "Contenu extrait :"
-          find build -maxdepth 4 -type f | sort | head -200
 
-      - name: Find Gradle project
+          echo "===== PROJET AURA ====="
+          find build/AURA_ANDROID_V17_RECONSTRUCTED -maxdepth 5 -type f | sort
+
+      - name: Set project directory
         run: |
-          PROJECT_DIR=$(find build -name gradlew -type f -print -quit | xargs -r dirname)
-          if [ -z "$PROJECT_DIR" ]; then
-            echo "ERREUR : aucun gradlew trouvé dans le ZIP."
+          PROJECT_DIR="build/AURA_ANDROID_V17_RECONSTRUCTED"
+
+          if [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
+            echo "ERREUR : settings.gradle.kts introuvable"
             exit 1
           fi
-          echo "Projet Android trouvé : $PROJECT_DIR"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Make Gradle executable
-        run: chmod +x "$PROJECT_DIR/gradlew"
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
 
       - name: Build APK
         working-directory: ${{ env.PROJECT_DIR }}
-        run: ./gradlew assembleDebug --stacktrace
+        run: |
+          set -e
+          gradle assembleDebug --stacktrace
 
       - name: Find APK
         run: |
-          echo "APK générés :"
+          echo "===== APK GÉNÉRÉS ====="
           find "$PROJECT_DIR" -type f -name "*.apk" -print
 
       - name: Upload APK
