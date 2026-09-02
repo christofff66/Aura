@@ -3,7 +3,7 @@ name: Build Aura V17 APK
 on:
   workflow_dispatch:
   push:
-    branches:
+    branches:AURA_ANDROID_V17_RELEASE_CANDIDATE_RECONSTRUCTED-2.zip
       - main
 
 jobs:
