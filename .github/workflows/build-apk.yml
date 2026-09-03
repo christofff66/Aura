@@ -16,36 +16,56 @@ jobs:
         with:
           lfs: true
 
+      - name: Debug - List files
+        run: |
+          echo "===== FICHIERS À LA RACINE ====="
+          ls -lah
+          echo ""
+          echo "===== VÉRIFIER SI ZIP EXISTE ====="
+          if [ -f "*.zip" ]; then
+            echo "ZIP trouvé :"
+            ls -lh *.zip
+          else
+            echo "ERREUR : Aucun fichier ZIP trouvé"
+          fi
+
       - name: Prepare Android project
         run: |
           set -e
           mkdir -p build
           
-          if [ ! -f "AURA_ANDROID_V17_RELEASE_CANDIDATE_RECONSTRUCTED-2.zip" ]; then
-            echo "ERREUR : Fichier ZIP non trouvé"
-            echo "Fichiers disponibles :"
-            ls -lah
+          ZIP_FILE="AURA_ANDROID_V17_RELEASE_CANDIDATE_RECONSTRUCTED-2.zip"
+          
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERREUR : $ZIP_FILE non trouvé"
+            echo "Fichiers ZIP disponibles :"
+            find . -name "*.zip" -type f
             exit 1
           fi
           
-          echo "Extraction du ZIP..."
-          unzip -q AURA_ANDROID_V17_RELEASE_CANDIDATE_RECONSTRUCTED-2.zip -d build
-
-          echo "===== PROJET AURA ====="
-          find build/AURA_ANDROID_V17_RECONSTRUCTED -maxdepth 5 -type f | sort
+          echo "Extraction de $ZIP_FILE..."
+          unzip -q "$ZIP_FILE" -d build
+          
+          echo "===== CONTENU EXTRAIT ====="
+          ls -la build/
+          
+          echo ""
+          echo "===== RECHERCHE DE settings.gradle.kts ====="
+          find build -name "settings.gradle.kts" -type f
 
       - name: Set project directory
         run: |
-          PROJECT_DIR="build/AURA_ANDROID_V17_RECONSTRUCTED"
-
-          if [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
+          # Trouver le répertoire qui contient settings.gradle.kts
+          PROJECT_DIR=$(find build -name "settings.gradle.kts" -type f | head -1 | xargs dirname)
+          
+          if [ -z "$PROJECT_DIR" ] || [ "$PROJECT_DIR" = "." ]; then
             echo "ERREUR : settings.gradle.kts introuvable"
-            echo "Contenu du répertoire :"
-            ls -la "$PROJECT_DIR"
+            find build -type f -name "*.gradle*" | head -20
             exit 1
           fi
-
+          
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Répertoire du projet détecté : $PROJECT_DIR"
 
       - name: Setup Java 17
         id: setup-java
@@ -55,21 +75,23 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-
-      - name: Check Gradle Wrapper
+      - name: Check and Initialize Gradle Wrapper
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
+          set -e
+          
           if [ -f "gradlew" ]; then
-            echo "Gradle Wrapper trouvé"
+            echo "✓ gradlew trouvé"
             chmod +x gradlew
-            ./gradlew --version
           else
-            echo "ERREUR : gradlew non trouvé"
-            find . -name "gradlew" -o -name "gradle-wrapper.properties"
-            exit 1
+            echo "⚠ gradlew non trouvé, initialisation..."
+            gradle wrapper --gradle-version 8.10 --distribution-type all
+            chmod +x gradlew
           fi
+          
+          echo ""
+          echo "===== Gradle Wrapper Version ====="
+          ./gradlew --version
 
       - name: Update Gradle Wrapper to 8.10
         working-directory: ${{ env.PROJECT_DIR }}
@@ -84,15 +106,13 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           if [ -f "app/build.gradle.kts" ]; then
+            echo "Mise à jour de app/build.gradle.kts..."
             sed -i 's/JavaVersion\.VERSION_[0-9]*/JavaVersion.VERSION_17/g' app/build.gradle.kts || true
             sed -i 's/sourceCompatibility = [0-9]*\.[0-9]*/sourceCompatibility = 17/g' app/build.gradle.kts || true
             sed -i 's/targetCompatibility = [0-9]*\.[0-9]*/targetCompatibility = 17/g' app/build.gradle.kts || true
             sed -i 's/jvmTarget = "[^"]*"/jvmTarget = "17"/g' app/build.gradle.kts || true
-            
-            echo "=== Updated app/build.gradle.kts ==="
-            head -50 app/build.gradle.kts
           else
-            echo "AVERTISSEMENT : app/build.gradle.kts non trouvé"
+            echo "⚠ app/build.gradle.kts non trouvé"
           fi
 
       - name: Build APK
@@ -106,10 +126,17 @@ jobs:
       - name: Find APK
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          echo "===== APK GÉNÉRÉS ====="
-          find . -type f -name "*.apk" -print || echo "Aucun APK trouvé"
+          echo "===== RECHERCHE DES APK ====="
+          if find . -type f -name "*.apk" | grep -q .; then
+            find . -type f -name "*.apk" -print
+          else
+            echo "Aucun APK trouvé"
+            echo "Contenu du build :"
+            find . -type d -name "build" | head -5
+          fi
 
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: Aura-V17-APK
