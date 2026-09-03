@@ -34,47 +34,43 @@ jobs:
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Setup Java 17
+      - name: Setup Java 11
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '11'
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Update Gradle Wrapper
+      - name: Update Gradle Wrapper to 8.10
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           if [ -f "gradle/wrapper/gradle-wrapper.properties" ]; then
-            sed -i 's/gradle-[0-9.]*-all\.zip/gradle-8.10-all.zip/' gradle/wrapper/gradle-wrapper.properties
+            sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.10-all.zip|' gradle/wrapper/gradle-wrapper.properties
+            echo "=== Updated gradle-wrapper.properties ==="
             cat gradle/wrapper/gradle-wrapper.properties
           fi
 
-      - name: Fix Java/Kotlin Compatibility
+      - name: Fix Java/Kotlin Target Compatibility
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           if [ -f "app/build.gradle.kts" ]; then
-            # Check if compileOptions already exists
-            if ! grep -q "sourceCompatibility" app/build.gradle.kts; then
-              # Add compileOptions block after android {
-              cat > /tmp/patch.txt << 'EOF'
+            # Fix Java target to 11 to match Gradle AGP requirements
+            sed -i 's/JavaVersion\.VERSION_[0-9]*/JavaVersion.VERSION_11/g' app/build.gradle.kts || true
+            sed -i 's/sourceCompatibility = [0-9]*\.[0-9]*/sourceCompatibility = 11/g' app/build.gradle.kts || true
+            sed -i 's/targetCompatibility = [0-9]*\.[0-9]*/targetCompatibility = 11/g' app/build.gradle.kts || true
             
-            compileOptions {
-                sourceCompatibility = JavaVersion.VERSION_17
-                targetCompatibility = JavaVersion.VERSION_17
-            }
-            
-            kotlinOptions {
-                jvmTarget = "17"
-            }
-EOF
-              # Insert after "android {" line
-              sed -i '/^android {/r /tmp/patch.txt' app/build.gradle.kts
+            # Ensure kotlinOptions jvmTarget is set to 11
+            if ! grep -q "jvmTarget" app/build.gradle.kts; then
+              # Add kotlinOptions if missing
+              sed -i '/android {/a\    kotlinOptions {\n        jvmTarget = "11"\n    }' app/build.gradle.kts
+            else
+              sed -i 's/jvmTarget = "[^"]*"/jvmTarget = "11"/g' app/build.gradle.kts
             fi
             
-            echo "=== app/build.gradle.kts after patch ==="
-            head -30 app/build.gradle.kts
+            echo "=== Updated app/build.gradle.kts (first 50 lines) ==="
+            head -50 app/build.gradle.kts
           fi
 
       - name: Build APK
