@@ -19,7 +19,6 @@ jobs:
           set -e
           mkdir -p build
           
-          # Vérifier que le fichier ZIP existe
           if [ ! -f "AURA_ANDROID_V17_RELEASE_CANDIDATE_RECONSTRUCTED-2.zip" ]; then
             echo "ERREUR : Fichier ZIP non trouvé"
             echo "Fichiers disponibles :"
@@ -50,9 +49,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v3
 
       - name: Verify Gradle Wrapper
         working-directory: ${{ env.PROJECT_DIR }}
@@ -87,8 +87,10 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxPermSize=512m"
+          JAVA_HOME: ${{ steps.setup-java.outputs.path }}
         run: |
           set -e
+          chmod +x gradlew
           ./gradlew assembleDebug --stacktrace
 
       - name: Find APK
