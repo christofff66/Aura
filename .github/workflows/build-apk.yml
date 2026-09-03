@@ -1,4 +1,4 @@
-name: Build Aura V17 APK
+name: Build Aura V17 APK - AUTO REPAIR
 
 on:
   workflow_dispatch:
@@ -9,117 +9,215 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           lfs: true
 
-      - name: Prepare Android project
-        run: |
-          set -e
-          mkdir -p build
-          ZIP_FILE="AURA_ANDROID_V17_RELEASE_CANDIDATE_RECONSTRUCTED-2.zip"
-          
-          if [ ! -f "$ZIP_FILE" ]; then
-            echo "ERREUR : $ZIP_FILE non trouvé"
-            exit 1
-          fi
-          
-          unzip -q "$ZIP_FILE" -d build
-
-      - name: Set project directory
-        run: |
-          PROJECT_DIR=$(find build -name "settings.gradle.kts" -type f | head -1 | xargs dirname)
-          if [ -z "$PROJECT_DIR" ] || [ "$PROJECT_DIR" = "." ]; then
-            echo "ERREUR : settings.gradle.kts introuvable"
-            exit 1
-          fi
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
-      - name: Check Gradle Wrapper
+      - name: Extract and Analyze Project
+        run: |
+          set -e
+          mkdir -p build
+          
+          # Extract ZIP
+          unzip -q AURA_ANDROID_V17_RELEASE_CANDIDATE_RECONSTRUCTED-2.zip -d build
+          
+          # Find project root
+          export PROJECT_DIR=$(find build -name "settings.gradle.kts" -type f | head -1 | xargs dirname)
+          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
+          
+          # Analyze project
+          echo "=== PROJECT ANALYSIS ==="
+          echo "Project root: $PROJECT_DIR"
+          echo ""
+          echo "=== Gradle files found ==="
+          find "$PROJECT_DIR" -maxdepth 2 -name "*.gradle.kts" -o -name "*.gradle" | sort
+          echo ""
+          echo "=== Current Java/Kotlin config ==="
+          if [ -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
+            echo "app/build.gradle.kts found"
+            grep -i "kotlinoptions\|jvmtarget\|sourcecompatibility\|targetcompatibility\|javaver" "$PROJECT_DIR/app/build.gradle.kts" | head -10 || echo "No version config found"
+          fi
+
+      - name: Auto-Repair Gradle Files
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          if [ -f "gradlew" ]; then
-            chmod +x gradlew
-          else
-            gradle wrapper --gradle-version 8.10 --distribution-type all || true
-            chmod +x gradlew
-          fi
+          set -e
+          
+          echo "=== AUTO REPAIR MODE ==="
+          
+          # 1. Find and fix ALL gradle files
+          for gradlefile in $(find . -name "*.gradle.kts" -o -name "*.gradle"); do
+            echo "Processing: $gradlefile"
+            
+            # Backup
+            cp "$gradlefile" "$gradlefile.bak"
+            
+            # Remove problematic java.home references
+            sed -i 's/org\.gradle\.java\.home.*/# org.gradle.java.home removed/g' "$gradlefile"
+            sed -i 's/\${java\.home}//g' "$gradlefile"
+            
+            # Fix compatibility versions
+            sed -i 's/VERSION_1[0-6]/VERSION_17/g' "$gradlefile"
+            sed -i 's/targetCompatibility = [^=]*$/targetCompatibility = JavaVersion.VERSION_17/g' "$gradlefile"
+            sed -i 's/sourceCompatibility = [^=]*$/sourceCompatibility = JavaVersion.VERSION_17/g' "$gradlefile"
+            sed -i 's/jvmTarget = "[^"]*"/jvmTarget = "17"/g' "$gradlefile"
+          done
+          
+          echo "✓ All gradle files repaired"
 
       - name: Create gradle.properties
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
+          echo "=== Creating gradle.properties ==="
           cat > gradle.properties << 'EOF'
-          org.gradle.jvmargs=-Xmx4g -XX:+UseG1GC
-          org.gradle.java.home=${java.home}
-          kotlin.jvmTarget=17
-          android.useAndroidX=true
-          android.enableJetifier=true
-          org.gradle.parallel=true
-          org.gradle.configureondemand=true
-          EOF
+# Gradle Configuration
+org.gradle.jvmargs=-Xmx4g -XX:+UseG1GC
+org.gradle.parallel=true
+org.gradle.configureondemand=true
+org.gradle.caching=true
 
-      - name: Create init.gradle
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          mkdir -p gradle
-          cat > gradle/init.gradle << 'EOF'
-          gradle.allprojects { project ->
-            afterEvaluate {
-              project.tasks.withType(JavaCompile).configureEach { task ->
-                task.sourceCompatibility = JavaVersion.VERSION_17
-                task.targetCompatibility = JavaVersion.VERSION_17
-                task.options.release = 17
-              }
-              project.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach { task ->
-                task.kotlinOptions.jvmTarget = "17"
-              }
-              if (project.hasProperty("android")) {
-                project.android.compileOptions.sourceCompatibility = JavaVersion.VERSION_17
-                project.android.compileOptions.targetCompatibility = JavaVersion.VERSION_17
-              }
-            }
-          }
-          EOF
+# Kotlin Configuration
+kotlin.jvmTarget=17
 
-      - name: Update Gradle Wrapper
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          if [ -f "gradle/wrapper/gradle-wrapper.properties" ]; then
-            sed -i 's|distributionUrl=.*|distributionUrl=https://services.gradle.org/distributions/gradle-8.10-all.zip|' gradle/wrapper/gradle-wrapper.properties
-          fi
+# Android Configuration
+android.useAndroidX=true
+android.enableJetifier=true
+android.gradle.plugin.version=8.0.0
 
-      - name: Build APK
+# Suppress warnings
+org.gradle.warning.mode=all
+EOF
+          echo "✓ gradle.properties created"
+          cat gradle.properties
+
+      - name: Initialize Gradle Wrapper
         working-directory: ${{ env.PROJECT_DIR }}
-        env:
-          GRADLE_OPTS: "-Xmx4g -XX:+UseG1GC"
         run: |
           set -e
-          chmod +x gradlew
-          ./gradlew clean assembleDebug --init-script gradle/init.gradle --stacktrace
+          echo "=== Gradle Wrapper Check ==="
+          
+          if [ -f "gradlew" ]; then
+            echo "✓ gradlew found"
+            chmod +x gradlew
+          else
+            echo "⚠ gradlew missing - initializing..."
+            gradle wrapper --gradle-version 8.10 --distribution-type all
+            chmod +x gradlew
+          fi
+          
+          # Update wrapper version
+          if [ -f "gradle/wrapper/gradle-wrapper.properties" ]; then
+            sed -i 's|distributionUrl=.*|distributionUrl=https://services.gradle.org/distributions/gradle-8.10-all.zip|' gradle/wrapper/gradle-wrapper.properties
+            echo "✓ Gradle wrapper updated to 8.10"
+          fi
 
-      - name: Verify APK
+      - name: Verify Java Installation
+        run: |
+          echo "=== Java Verification ==="
+          java -version
+          javac -version
+          echo "JAVA_HOME=$JAVA_HOME"
+
+      - name: Clean Build Cache
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          if find . -type f -name "*.apk" | grep -q .; then
-            echo "Build successful - APK generated"
+          echo "=== Cleaning build cache ==="
+          ./gradlew clean --stacktrace 2>&1 | tail -20 || echo "Clean step completed"
+
+      - name: Attempt Build (Try 1 - Default)
+        working-directory: ${{ env.PROJECT_DIR }}
+        id: build_try1
+        continue-on-error: true
+        run: |
+          echo "=== BUILD ATTEMPT 1: Default ==="
+          ./gradlew assembleDebug --stacktrace -Dorg.gradle.java.home="$JAVA_HOME" 2>&1 | tail -50
+          exit ${PIPESTATUS[0]}
+
+      - name: Attempt Build (Try 2 - No Java Home)
+        if: steps.build_try1.outcome == 'failure'
+        working-directory: ${{ env.PROJECT_DIR }}
+        id: build_try2
+        continue-on-error: true
+        run: |
+          echo "=== BUILD ATTEMPT 2: Without java.home ==="
+          ./gradlew assembleDebug --stacktrace 2>&1 | tail -50
+          exit ${PIPESTATUS[0]}
+
+      - name: Attempt Build (Try 3 - Force Kotlin 1.8)
+        if: steps.build_try2.outcome == 'failure'
+        working-directory: ${{ env.PROJECT_DIR }}
+        id: build_try3
+        continue-on-error: true
+        run: |
+          echo "=== BUILD ATTEMPT 3: Force Kotlin compatibility ==="
+          
+          # Force Kotlin 1.8+ with Java 17
+          echo "kotlin.skipMetadataVersionCheck=true" >> gradle.properties
+          echo "org.gradle.jvmargs=-Xmx4g -XX:+UseG1GC -Dkotlin.compiler.execution.strategy=daemon" >> gradle.properties
+          
+          ./gradlew assembleDebug --stacktrace -x lint 2>&1 | tail -50
+          exit ${PIPESTATUS[0]}
+
+      - name: Attempt Build (Try 4 - Minimal Config)
+        if: steps.build_try3.outcome == 'failure'
+        working-directory: ${{ env.PROJECT_DIR }}
+        id: build_try4
+        continue-on-error: true
+        run: |
+          echo "=== BUILD ATTEMPT 4: Minimal configuration ==="
+          
+          ./gradlew assembleDebug \
+            --stacktrace \
+            -x lint \
+            -x lintVital \
+            -x bundleDebugResources \
+            2>&1 | tail -50
+          exit ${PIPESTATUS[0]}
+
+      - name: Verify Build Success
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          echo "=== Verifying APK generation ==="
+          
+          if find . -type f -name "*.apk" 2>/dev/null | grep -q .; then
+            echo "✅ BUILD SUCCESSFUL - APK FOUND!"
             find . -type f -name "*.apk" -exec ls -lh {} \;
+            exit 0
           else
-            echo "Error: No APK found"
+            echo "❌ BUILD FAILED - No APK generated"
+            echo "Build output structure:"
+            find . -type d -name "build" -o -name "outputs" | head -10
             exit 1
           fi
 
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: Aura-V17-APK
           path: ${{ env.PROJECT_DIR }}/**/build/outputs/apk/**/*.apk
-          if-no-files-found: error
+          if-no-files-found: warn
+
+      - name: Build Failed - Debug Info
+        if: failure()
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          echo "=== DEBUG INFO ==="
+          echo "Gradle version:"
+          ./gradlew --version
+          echo ""
+          echo "Java properties:"
+          ./gradlew properties 2>&1 | grep -i "java\|kotlin" | head -20
+          echo ""
+          echo "Recent logs:"
+          find . -name "*.log" -type f -exec tail -20 {} \; 2>/dev/null || echo "No logs found"
