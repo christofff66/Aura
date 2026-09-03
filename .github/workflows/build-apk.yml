@@ -27,9 +27,7 @@ jobs:
             exit 1
           fi
           
-          echo "Extraction du ZIP..."
           unzip -q "$ZIP_FILE" -d build
-          echo "✓ ZIP extrait"
 
       - name: Set project directory
         run: |
@@ -39,108 +37,111 @@ jobs:
             exit 1
           fi
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "✓ Répertoire projet trouvé: $PROJECT_DIR"
 
       - name: Setup Java 17
-        id: setup-java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Verify Java 17
-        run: |
-          java -version
-          javac -version
-
-      - name: Check and Initialize Gradle Wrapper
+      - name: Check Gradle Wrapper
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          set -e
           if [ -f "gradlew" ]; then
-            echo "✓ gradlew trouvé"
             chmod +x gradlew
           else
-            echo "⚠ gradlew non trouvé, initialisation..."
             gradle wrapper --gradle-version 8.10 --distribution-type all || true
             chmod +x gradlew
           fi
-          
-          if [ ! -f "gradlew" ]; then
-            echo "ERREUR : gradlew introuvable après initialisation"
-            exit 1
-          fi
 
-      - name: Create gradle.properties
+      - name: Create gradle.properties with JVM Toolchain
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          # Créer ou ajouter à gradle.properties
-          {
-            echo "org.gradle.jvmargs=-Xmx4g -XX:+UseG1GC"
-            echo "kotlin.jvmTarget=17"
-            echo "android.useAndroidX=true"
-            echo "android.enableJetifier=true"
-            echo "org.gradle.java.home=$JAVA_HOME"
-          } >> gradle.properties
-          echo "✓ gradle.properties configuré"
-          tail -5 gradle.properties
+          cat > gradle.properties << 'EOF'
+# JVM Configuration
+org.gradle.jvmargs=-Xmx4g -XX:+UseG1GC
+org.gradle.java.home=${java.home}
 
-      - name: Fix all build.gradle.kts files
+# Kotlin Configuration
+kotlin.jvmTarget=17
+
+# Android Configuration
+android.useAndroidX=true
+android.enableJetifier=true
+
+# Build Configuration
+org.gradle.parallel=true
+org.gradle.configureondemand=true
+EOF
+          echo "✓ gradle.properties créé"
+
+      - name: Create init.gradle for JVM Toolchain
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          echo "Recherche de tous les build.gradle.kts..."
-          find . -name "build.gradle.kts" -type f | while read file; do
-            echo "Traitement: $file"
-            
-            # Remplacer VERSION_X par VERSION_17
-            sed -i 's/VERSION_1[0-6]/VERSION_17/g' "$file"
-            sed -i 's/VERSION_11/VERSION_17/g' "$file"
-            sed -i 's/VERSION_8/VERSION_17/g' "$file"
-            
-            # Remplacer targetCompatibility et sourceCompatibility
-            sed -i 's/targetCompatibility = [0-9.]\+/targetCompatibility = "17"/g' "$file"
-            sed -i 's/sourceCompatibility = [0-9.]\+/sourceCompatibility = "17"/g' "$file"
-            sed -i 's/jvmTarget = "[^"]*"/jvmTarget = "17"/g' "$file"
-            
-            # Remplacer les patterns de version 1.X
-            sed -i 's/"1\.[0-9]*"/"17"/g' "$file"
-          done
-          echo "✓ Tous les build.gradle.kts traités"
+          mkdir -p gradle
+          cat > gradle/init.gradle << 'EOF'
+gradle.allprojects {
+  afterEvaluate { project ->
+    // Force Java 17 for all compilation tasks
+    project.tasks.withType(JavaCompile).configureEach {
+      sourceCompatibility = JavaVersion.VERSION_17
+      targetCompatibility = JavaVersion.VERSION_17
+      options.release = 17
+    }
+    
+    project.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+      kotlinOptions {
+        jvmTarget = "17"
+        freeCompilerArgs += ["-Xjvm-default=all"]
+      }
+    }
+    
+    // Android-specific configuration
+    if (project.hasProperty("android")) {
+      project.android {
+        compileOptions {
+          sourceCompatibility JavaVersion.VERSION_17
+          targetCompatibility JavaVersion.VERSION_17
+        }
+      }
+    }
+  }
+}
+EOF
+          echo "✓ gradle/init.gradle créé"
 
-      - name: Update Gradle Wrapper Version
+      - name: Update Gradle Wrapper
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           if [ -f "gradle/wrapper/gradle-wrapper.properties" ]; then
             sed -i 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-8.10-all.zip|' gradle/wrapper/gradle-wrapper.properties
-            echo "✓ gradle-wrapper.properties mis à jour"
-            grep "distributionUrl" gradle/wrapper/gradle-wrapper.properties
           fi
 
       - name: Build APK
         working-directory: ${{ env.PROJECT_DIR }}
         env:
           GRADLE_OPTS: "-Xmx4g -XX:+UseG1GC"
+          ORG_GRADLE_PROJECT_kotlin_jvmTarget: "17"
         run: |
           set -e
           chmod +x gradlew
-          ./gradlew --version
-          ./gradlew clean assembleDebug --stacktrace
+          ./gradlew clean assembleDebug \
+            --init-script gradle/init.gradle \
+            -Dorg.gradle.java.home=$JAVA_HOME \
+            --stacktrace
 
-      - name: Verify APK Generated
+      - name: Verify APK
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          echo "Recherche des APK..."
           if find . -type f -name "*.apk" -print | grep -q .; then
-            echo "✓ APK trouvé(s)"
+            echo "✓ BUILD RÉUSSI - APK généré"
             find . -type f -name "*.apk" -exec ls -lh {} \;
           else
-            echo "✗ ERREUR: Aucun APK généré"
-            echo "Contenu du build:"
-            find . -type d -name "build" -exec ls -la {} \;
+            echo "✗ Aucun APK trouvé"
             exit 1
           fi
 
-      - name: Upload APK Artifacts
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Aura-V17-APK
