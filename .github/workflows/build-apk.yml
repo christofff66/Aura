@@ -54,90 +54,66 @@ jobs:
             chmod +x gradlew
           fi
 
-      - name: Create gradle.properties with JVM Toolchain
+      - name: Create gradle.properties
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           cat > gradle.properties << 'EOF'
-# JVM Configuration
-org.gradle.jvmargs=-Xmx4g -XX:+UseG1GC
-org.gradle.java.home=${java.home}
+          org.gradle.jvmargs=-Xmx4g -XX:+UseG1GC
+          org.gradle.java.home=${java.home}
+          kotlin.jvmTarget=17
+          android.useAndroidX=true
+          android.enableJetifier=true
+          org.gradle.parallel=true
+          org.gradle.configureondemand=true
+          EOF
 
-# Kotlin Configuration
-kotlin.jvmTarget=17
-
-# Android Configuration
-android.useAndroidX=true
-android.enableJetifier=true
-
-# Build Configuration
-org.gradle.parallel=true
-org.gradle.configureondemand=true
-EOF
-          echo "✓ gradle.properties créé"
-
-      - name: Create init.gradle for JVM Toolchain
+      - name: Create init.gradle
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           mkdir -p gradle
           cat > gradle/init.gradle << 'EOF'
-gradle.allprojects {
-  afterEvaluate { project ->
-    // Force Java 17 for all compilation tasks
-    project.tasks.withType(JavaCompile).configureEach {
-      sourceCompatibility = JavaVersion.VERSION_17
-      targetCompatibility = JavaVersion.VERSION_17
-      options.release = 17
-    }
-    
-    project.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
-      kotlinOptions {
-        jvmTarget = "17"
-        freeCompilerArgs += ["-Xjvm-default=all"]
-      }
-    }
-    
-    // Android-specific configuration
-    if (project.hasProperty("android")) {
-      project.android {
-        compileOptions {
-          sourceCompatibility JavaVersion.VERSION_17
-          targetCompatibility JavaVersion.VERSION_17
-        }
-      }
-    }
-  }
-}
-EOF
-          echo "✓ gradle/init.gradle créé"
+          gradle.allprojects { project ->
+            afterEvaluate {
+              project.tasks.withType(JavaCompile).configureEach { task ->
+                task.sourceCompatibility = JavaVersion.VERSION_17
+                task.targetCompatibility = JavaVersion.VERSION_17
+                task.options.release = 17
+              }
+              project.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach { task ->
+                task.kotlinOptions.jvmTarget = "17"
+              }
+              if (project.hasProperty("android")) {
+                project.android.compileOptions.sourceCompatibility = JavaVersion.VERSION_17
+                project.android.compileOptions.targetCompatibility = JavaVersion.VERSION_17
+              }
+            }
+          }
+          EOF
 
       - name: Update Gradle Wrapper
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           if [ -f "gradle/wrapper/gradle-wrapper.properties" ]; then
-            sed -i 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-8.10-all.zip|' gradle/wrapper/gradle-wrapper.properties
+            sed -i 's|distributionUrl=.*|distributionUrl=https://services.gradle.org/distributions/gradle-8.10-all.zip|' gradle/wrapper/gradle-wrapper.properties
           fi
 
       - name: Build APK
         working-directory: ${{ env.PROJECT_DIR }}
         env:
           GRADLE_OPTS: "-Xmx4g -XX:+UseG1GC"
-          ORG_GRADLE_PROJECT_kotlin_jvmTarget: "17"
         run: |
           set -e
           chmod +x gradlew
-          ./gradlew clean assembleDebug \
-            --init-script gradle/init.gradle \
-            -Dorg.gradle.java.home=$JAVA_HOME \
-            --stacktrace
+          ./gradlew clean assembleDebug --init-script gradle/init.gradle --stacktrace
 
       - name: Verify APK
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          if find . -type f -name "*.apk" -print | grep -q .; then
-            echo "✓ BUILD RÉUSSI - APK généré"
+          if find . -type f -name "*.apk" | grep -q .; then
+            echo "Build successful - APK generated"
             find . -type f -name "*.apk" -exec ls -lh {} \;
           else
-            echo "✗ Aucun APK trouvé"
+            echo "Error: No APK found"
             exit 1
           fi
 
