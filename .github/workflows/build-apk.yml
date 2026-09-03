@@ -18,6 +18,15 @@ jobs:
         run: |
           set -e
           mkdir -p build
+          
+          # Vérifier que le fichier ZIP existe
+          if [ ! -f "AURA_ANDROID_V17_RELEASE_CANDIDATE_RECONSTRUCTED-2.zip" ]; then
+            echo "ERREUR : Fichier ZIP non trouvé"
+            echo "Fichiers disponibles :"
+            ls -la
+            exit 1
+          fi
+          
           unzip -q AURA_ANDROID_V17_RELEASE_CANDIDATE_RECONSTRUCTED-2.zip -d build
 
           echo "===== PROJET AURA ====="
@@ -29,23 +38,30 @@ jobs:
 
           if [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
             echo "ERREUR : settings.gradle.kts introuvable"
+            echo "Contenu du répertoire :"
+            ls -la "$PROJECT_DIR"
             exit 1
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Setup Java 11
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '11'
+          java-version: '17'
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Update Gradle Wrapper to 8.10
+      - name: Verify Gradle Wrapper
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
+          if [ ! -f "gradle/wrapper/gradle-wrapper.properties" ]; then
+            echo "Initialisation du Gradle Wrapper..."
+            gradle wrapper --gradle-version 8.10 || echo "Gradle wrapper initialization"
+          fi
+          
           if [ -f "gradle/wrapper/gradle-wrapper.properties" ]; then
             sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.10-all.zip|' gradle/wrapper/gradle-wrapper.properties
             echo "=== Updated gradle-wrapper.properties ==="
@@ -56,38 +72,34 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           if [ -f "app/build.gradle.kts" ]; then
-            # Fix Java target to 11 to match Gradle AGP requirements
-            sed -i 's/JavaVersion\.VERSION_[0-9]*/JavaVersion.VERSION_11/g' app/build.gradle.kts || true
-            sed -i 's/sourceCompatibility = [0-9]*\.[0-9]*/sourceCompatibility = 11/g' app/build.gradle.kts || true
-            sed -i 's/targetCompatibility = [0-9]*\.[0-9]*/targetCompatibility = 11/g' app/build.gradle.kts || true
-            
-            # Ensure kotlinOptions jvmTarget is set to 11
-            if ! grep -q "jvmTarget" app/build.gradle.kts; then
-              # Add kotlinOptions if missing
-              sed -i '/android {/a\    kotlinOptions {\n        jvmTarget = "11"\n    }' app/build.gradle.kts
-            else
-              sed -i 's/jvmTarget = "[^"]*"/jvmTarget = "11"/g' app/build.gradle.kts
-            fi
+            sed -i 's/JavaVersion\.VERSION_[0-9]*/JavaVersion.VERSION_17/g' app/build.gradle.kts || true
+            sed -i 's/sourceCompatibility = [0-9]*\.[0-9]*/sourceCompatibility = 17/g' app/build.gradle.kts || true
+            sed -i 's/targetCompatibility = [0-9]*\.[0-9]*/targetCompatibility = 17/g' app/build.gradle.kts || true
+            sed -i 's/jvmTarget = "[^"]*"/jvmTarget = "17"/g' app/build.gradle.kts || true
             
             echo "=== Updated app/build.gradle.kts (first 50 lines) ==="
             head -50 app/build.gradle.kts
+          else
+            echo "AVERTISSEMENT : app/build.gradle.kts non trouvé"
           fi
 
       - name: Build APK
         working-directory: ${{ env.PROJECT_DIR }}
+        env:
+          GRADLE_OPTS: "-Xmx4g -XX:MaxPermSize=512m"
         run: |
           set -e
-          gradle assembleDebug --stacktrace
+          ./gradlew assembleDebug --stacktrace
 
       - name: Find APK
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           echo "===== APK GÉNÉRÉS ====="
-          find "$PROJECT_DIR" -type f -name "*.apk" -print
+          find . -type f -name "*.apk" -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Aura-V17-APK
-          path: |
-            ${{ env.PROJECT_DIR }}/**/build/outputs/apk/**/*.apk
+          path: ${{ env.PROJECT_DIR }}/**/build/outputs/apk/**/*.apk
           if-no-files-found: error
