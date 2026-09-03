@@ -20,112 +20,106 @@ jobs:
         run: |
           set -e
           mkdir -p build
-          
           ZIP_FILE="AURA_ANDROID_V17_RELEASE_CANDIDATE_RECONSTRUCTED-2.zip"
           
           if [ ! -f "$ZIP_FILE" ]; then
             echo "ERREUR : $ZIP_FILE non trouvé"
-            find . -name "*.zip" -type f
             exit 1
           fi
           
-          echo "Extraction de $ZIP_FILE..."
           unzip -q "$ZIP_FILE" -d build
 
       - name: Set project directory
         run: |
           PROJECT_DIR=$(find build -name "settings.gradle.kts" -type f | head -1 | xargs dirname)
-          
           if [ -z "$PROJECT_DIR" ] || [ "$PROJECT_DIR" = "." ]; then
             echo "ERREUR : settings.gradle.kts introuvable"
             exit 1
           fi
-          
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Setup Java 17
-        id: setup-java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
       - name: Check and Initialize Gradle Wrapper
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          set -e
-          
           if [ -f "gradlew" ]; then
             chmod +x gradlew
           else
             gradle wrapper --gradle-version 8.10 --distribution-type all
             chmod +x gradlew
           fi
-          
-          ./gradlew --version
 
-      - name: Fix Java/Kotlin Target Compatibility (GLOBAL)
+      - name: Create gradle.properties with JVM Toolchain
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          echo "===== FIX 1: build.gradle.kts racine ====="
-          if [ -f "build.gradle.kts" ]; then
-            sed -i 's/JavaVersion\.VERSION_[0-9]*/JavaVersion.VERSION_17/g' build.gradle.kts || true
-            sed -i 's/sourceCompatibility = [0-9]*\.[0-9]*/sourceCompatibility = 17/g' build.gradle.kts || true
-            sed -i 's/targetCompatibility = [0-9]*\.[0-9]*/targetCompatibility = 17/g' build.gradle.kts || true
-            sed -i 's/jvmTarget = "[^"]*"/jvmTarget = "17"/g' build.gradle.kts || true
-            sed -i 's/"1\.[0-9]*"/"17"/g' build.gradle.kts || true
-            echo "✓ build.gradle.kts (racine) mis à jour"
-          fi
-          
-          echo ""
-          echo "===== FIX 2: app/build.gradle.kts ====="
-          if [ -f "app/build.gradle.kts" ]; then
-            sed -i 's/JavaVersion\.VERSION_[0-9]*/JavaVersion.VERSION_17/g' app/build.gradle.kts || true
-            sed -i 's/sourceCompatibility = [0-9]*\.[0-9]*/sourceCompatibility = 17/g' app/build.gradle.kts || true
-            sed -i 's/targetCompatibility = [0-9]*\.[0-9]*/targetCompatibility = 17/g' app/build.gradle.kts || true
-            sed -i 's/jvmTarget = "[^"]*"/jvmTarget = "17"/g' app/build.gradle.kts || true
-            sed -i 's/"1\.[0-9]*"/"17"/g' app/build.gradle.kts || true
-            echo "✓ app/build.gradle.kts mis à jour"
-          fi
-          
-          echo ""
-          echo "===== FIX 3: Tous les build.gradle.kts ====="
-          find . -name "build.gradle.kts" -type f | while read file; do
-            sed -i 's/JavaVersion\.VERSION_[0-9]*/JavaVersion.VERSION_17/g' "$file" || true
-            sed -i 's/sourceCompatibility = [0-9]*\.[0-9]*/sourceCompatibility = 17/g' "$file" || true
-            sed -i 's/targetCompatibility = [0-9]*\.[0-9]*/targetCompatibility = 17/g' "$file" || true
-            sed -i 's/jvmTarget = "[^"]*"/jvmTarget = "17"/g' "$file" || true
-            sed -i 's/"1\.[0-9]*"/"17"/g' "$file" || true
-          done
-          echo "✓ Tous les build.gradle.kts mis à jour"
+          cat >> gradle.properties << 'EOF'
+org.gradle.java.home=${{ steps.setup-java.outputs.path }}
+kotlin.jvmTarget=17
+android.useAndroidX=true
+android.enableJetifier=true
+EOF
+          echo "✓ gradle.properties créé avec Java 17"
+          cat gradle.properties
 
-      - name: Update Gradle Wrapper to 8.10
+      - name: Force Java/Kotlin to 17 in all build files
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          # Boucle sur TOUS les build.gradle.kts
+          find . -name "build.gradle.kts" -type f | while read file; do
+            echo "Traitement : $file"
+            
+            # Remplacer les versions Java/Kotlin
+            sed -i 's/VERSION_1[0-6]/VERSION_17/g' "$file"
+            sed -i 's/targetCompatibility = 1\.[0-9]/targetCompatibility = 17/g' "$file"
+            sed -i 's/sourceCompatibility = 1\.[0-9]/sourceCompatibility = 17/g' "$file"
+            
+            # Assurer jvmTarget = 17
+            if grep -q "kotlinOptions" "$file"; then
+              sed -i '/kotlinOptions {/,/}/ s/jvmTarget = "[^"]*"/jvmTarget = "17"/g' "$file"
+            else
+              # Ajouter kotlinOptions si absent
+              sed -i '/android {/a\    kotlinOptions {\n        jvmTarget = "17"\n    }' "$file"
+            fi
+          done
+          echo "✓ Tous les build.gradle.kts traités"
+
+      - name: Update Gradle Wrapper
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           if [ -f "gradle/wrapper/gradle-wrapper.properties" ]; then
             sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.10-all.zip|' gradle/wrapper/gradle-wrapper.properties
-            echo "✓ gradle-wrapper.properties mis à jour"
           fi
 
-      - name: Build APK
+      - name: Build APK with Debug Output
         working-directory: ${{ env.PROJECT_DIR }}
         env:
-          GRADLE_OPTS: "-Xmx4g"
+          GRADLE_OPTS: "-Xmx4g -XX:+UseG1GC"
+          ORG_GRADLE_PROJECT_kotlin_jvmTarget: "17"
         run: |
-          set -e
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleDebug \
+            -Dkotlin.jvmTarget=17 \
+            -Dorg.gradle.java.home=${{ steps.setup-java.outputs.path }} \
+            --stacktrace \
+            --info 2>&1 | tail -100
 
-      - name: Find APK
+      - name: Find and Upload APK
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          echo "===== RECHERCHE DES APK ====="
-          find . -type f -name "*.apk" -print || echo "Aucun APK trouvé"
+          if find . -type f -name "*.apk"; then
+            echo "✓ APK trouvé"
+          else
+            echo "✗ Aucun APK généré"
+            exit 1
+          fi
 
-      - name: Upload APK
+      - name: Upload Artifacts
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: Aura-V17-APK
           path: ${{ env.PROJECT_DIR }}/**/build/outputs/apk/**/*.apk
-          if-no-files-found: warn
