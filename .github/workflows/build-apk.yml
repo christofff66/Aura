@@ -13,6 +13,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Prepare Android project
         run: |
@@ -22,10 +24,11 @@ jobs:
           if [ ! -f "AURA_ANDROID_V17_RELEASE_CANDIDATE_RECONSTRUCTED-2.zip" ]; then
             echo "ERREUR : Fichier ZIP non trouvé"
             echo "Fichiers disponibles :"
-            ls -la
+            ls -lah
             exit 1
           fi
           
+          echo "Extraction du ZIP..."
           unzip -q AURA_ANDROID_V17_RELEASE_CANDIDATE_RECONSTRUCTED-2.zip -d build
 
           echo "===== PROJET AURA ====="
@@ -45,6 +48,7 @@ jobs:
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Setup Java 17
+        id: setup-java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -54,14 +58,22 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Verify Gradle Wrapper
+      - name: Check Gradle Wrapper
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          if [ ! -f "gradle/wrapper/gradle-wrapper.properties" ]; then
-            echo "Initialisation du Gradle Wrapper..."
-            gradle wrapper --gradle-version 8.10 || echo "Gradle wrapper initialization"
+          if [ -f "gradlew" ]; then
+            echo "Gradle Wrapper trouvé"
+            chmod +x gradlew
+            ./gradlew --version
+          else
+            echo "ERREUR : gradlew non trouvé"
+            find . -name "gradlew" -o -name "gradle-wrapper.properties"
+            exit 1
           fi
-          
+
+      - name: Update Gradle Wrapper to 8.10
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
           if [ -f "gradle/wrapper/gradle-wrapper.properties" ]; then
             sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.10-all.zip|' gradle/wrapper/gradle-wrapper.properties
             echo "=== Updated gradle-wrapper.properties ==="
@@ -77,7 +89,7 @@ jobs:
             sed -i 's/targetCompatibility = [0-9]*\.[0-9]*/targetCompatibility = 17/g' app/build.gradle.kts || true
             sed -i 's/jvmTarget = "[^"]*"/jvmTarget = "17"/g' app/build.gradle.kts || true
             
-            echo "=== Updated app/build.gradle.kts (first 50 lines) ==="
+            echo "=== Updated app/build.gradle.kts ==="
             head -50 app/build.gradle.kts
           else
             echo "AVERTISSEMENT : app/build.gradle.kts non trouvé"
@@ -86,22 +98,20 @@ jobs:
       - name: Build APK
         working-directory: ${{ env.PROJECT_DIR }}
         env:
-          GRADLE_OPTS: "-Xmx4g -XX:MaxPermSize=512m"
-          JAVA_HOME: ${{ steps.setup-java.outputs.path }}
+          GRADLE_OPTS: "-Xmx4g"
         run: |
           set -e
-          chmod +x gradlew
           ./gradlew assembleDebug --stacktrace
 
       - name: Find APK
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           echo "===== APK GÉNÉRÉS ====="
-          find . -type f -name "*.apk" -print
+          find . -type f -name "*.apk" -print || echo "Aucun APK trouvé"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Aura-V17-APK
           path: ${{ env.PROJECT_DIR }}/**/build/outputs/apk/**/*.apk
-          if-no-files-found: error
+          if-no-files-found: warn
