@@ -51,6 +51,32 @@ jobs:
             cat gradle/wrapper/gradle-wrapper.properties
           fi
 
+      - name: Fix Java/Kotlin Compatibility
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          if [ -f "app/build.gradle.kts" ]; then
+            # Check if compileOptions already exists
+            if ! grep -q "sourceCompatibility" app/build.gradle.kts; then
+              # Add compileOptions block after android {
+              cat > /tmp/patch.txt << 'EOF'
+            
+            compileOptions {
+                sourceCompatibility = JavaVersion.VERSION_17
+                targetCompatibility = JavaVersion.VERSION_17
+            }
+            
+            kotlinOptions {
+                jvmTarget = "17"
+            }
+EOF
+              # Insert after "android {" line
+              sed -i '/^android {/r /tmp/patch.txt' app/build.gradle.kts
+            fi
+            
+            echo "=== app/build.gradle.kts after patch ==="
+            head -30 app/build.gradle.kts
+          fi
+
       - name: Build APK
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
