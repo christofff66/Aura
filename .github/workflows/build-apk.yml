@@ -40,10 +40,16 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Gradle 8.7
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.7'
+
+      - name: Update Gradle Wrapper
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          if [ -f "gradle/wrapper/gradle-wrapper.properties" ]; then
+            sed -i 's/gradle-[0-9.]*-all\.zip/gradle-8.10-all.zip/' gradle/wrapper/gradle-wrapper.properties
+            cat gradle/wrapper/gradle-wrapper.properties
+          fi
 
       - name: Build APK
         working-directory: ${{ env.PROJECT_DIR }}
